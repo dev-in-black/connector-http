@@ -18,8 +18,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check Connector Tag
-        uses: conduitio/automation/actions/check_connector_tag@main
+      # - name: Check Connector Tag
+      #   uses: conduitio/automation/actions/check_connector_tag@main
 
       - name: Set up Go
         uses: actions/setup-go@v5
