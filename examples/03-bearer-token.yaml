@@ -1,0 +1,43 @@
+# HTTP Sink with Bearer Token Authentication
+# This example shows how to use Bearer Token authentication
+
+version: "2.2"
+pipelines:
+  - id: http-bearer-pipeline
+    status: running
+    name: HTTP Sink with Bearer Token
+    description: Send records with Bearer Token authentication
+
+    connectors:
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "api-events"
+          groupID: "http-bearer-group"
+
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-bearer-destination
+        settings:
+          url: "https://api.example.com/v1/events"
+          method: "POST"
+          timeout: "60s"
+
+          # Bearer Token Authentication
+          authType: "bearer"
+          bearerToken: "${BEARER_TOKEN}"
+
+          # Connection pooling
+          maxIdleConns: "100"
+          maxConnsPerHost: "10"
+
+          # Response handling
+          responseOutputPath: "/var/conduit/http-responses"
+          includeResponseHeaders: "true"
+          includeRequestMetadata: "true"
+
+# Environment variables needed:
+# export BEARER_TOKEN="your-bearer-token-here"

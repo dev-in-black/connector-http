@@ -1,0 +1,91 @@
+# Complete Request-Response Pipeline
+# This example shows how to set up both request and response pipelines
+# Pipeline 1: Send HTTP requests and write responses to files
+# Pipeline 2: Read response files and publish to Kafka
+
+version: "2.2"
+pipelines:
+  # === PIPELINE 1: HTTP Request Pipeline ===
+  - id: http-request-pipeline
+    status: running
+    name: HTTP Request Pipeline
+    description: Send records to HTTP endpoint and capture responses
+
+    connectors:
+      - id: kafka-request-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "webhook-requests"
+          groupID: "http-request-group"
+
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-request-destination
+        settings:
+          url: "https://api.example.com/webhook"
+          method: "POST"
+          authType: "bearer"
+          bearerToken: "${API_TOKEN}"
+
+          # Write responses to shared directory
+          responseOutputPath: "/tmp/conduit-http-responses"
+          successFile: "success.ndjson"
+          errorFile: "error.ndjson"
+          includeResponseHeaders: "true"
+          includeRequestMetadata: "true"
+
+          maxRetries: "3"
+
+  # === PIPELINE 2: Success Response Pipeline ===
+  - id: http-success-response-pipeline
+    status: running
+    name: HTTP Success Response Pipeline
+    description: Read successful HTTP responses and publish to Kafka
+
+    connectors:
+      - id: success-file-source
+        type: source
+        plugin: builtin:file
+        settings:
+          path: "/tmp/conduit-http-responses/success.ndjson"
+          # Poll for new responses every second
+          pollingPeriod: "1s"
+
+      - id: kafka-success-sink
+        type: destination
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topic: "webhook-responses-success"
+
+  # === PIPELINE 3: Error Response Pipeline ===
+  - id: http-error-response-pipeline
+    status: running
+    name: HTTP Error Response Pipeline
+    description: Read failed HTTP responses and publish to error topic
+
+    connectors:
+      - id: error-file-source
+        type: source
+        plugin: builtin:file
+        settings:
+          path: "/tmp/conduit-http-responses/error.ndjson"
+          pollingPeriod: "1s"
+
+      - id: kafka-error-sink
+        type: destination
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topic: "webhook-responses-errors"
+
+# Data Flow:
+# 1. Records from 'webhook-requests' → HTTP endpoint
+# 2. HTTP 2xx responses → success.ndjson → 'webhook-responses-success'
+# 3. HTTP errors/failures → error.ndjson → 'webhook-responses-errors'
+
+# Environment variables:
+# export API_TOKEN="your-api-token"

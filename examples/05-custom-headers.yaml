@@ -1,0 +1,45 @@
+# HTTP Sink with Custom Headers
+# This example shows how to add custom headers from environment variables
+
+version: "2.2"
+pipelines:
+  - id: http-custom-headers-pipeline
+    status: running
+    name: HTTP Sink with Custom Headers
+    description: Send records with custom headers from environment
+
+    connectors:
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "app-events"
+          groupID: "http-headers-group"
+
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-custom-headers-destination
+        settings:
+          url: "https://api.example.com/events"
+          method: "POST"
+          authType: "bearer"
+          bearerToken: "${API_TOKEN}"
+
+          # Custom headers are loaded from environment variables
+          # Variables starting with HTTP_HEADER_ are automatically added as headers
+          # The prefix is removed and underscores are converted to hyphens
+          envHeaderPrefix: "HTTP_HEADER_"
+
+# Environment variables for custom headers:
+# export HTTP_HEADER_X_API_KEY="secret-api-key"
+# export HTTP_HEADER_X_TENANT_ID="tenant-123"
+# export HTTP_HEADER_X_REQUEST_SOURCE="conduit-pipeline"
+# export HTTP_HEADER_USER_AGENT="Conduit-HTTP-Sink/1.0"
+#
+# These become HTTP headers:
+# X-Api-Key: secret-api-key
+# X-Tenant-Id: tenant-123
+# X-Request-Source: conduit-pipeline
+# User-Agent: Conduit-HTTP-Sink/1.0

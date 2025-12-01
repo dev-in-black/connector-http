@@ -1,0 +1,42 @@
+# HTTP Sink with Basic Authentication
+# This example shows how to use Basic Auth with username and password
+
+version: "2.2"
+pipelines:
+  - id: http-basic-auth-pipeline
+    status: running
+    name: HTTP Sink with Basic Auth
+    description: Send records to an HTTP endpoint with Basic Authentication
+
+    connectors:
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "events"
+          groupID: "http-basic-auth-group"
+
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-basic-auth-destination
+        settings:
+          url: "https://api.example.com/webhook"
+          method: "POST"
+
+          # Basic Authentication
+          authType: "basic"
+          basicUsername: "${BASIC_AUTH_USERNAME}"
+          basicPassword: "${BASIC_AUTH_PASSWORD}"
+
+          # Retry configuration
+          maxRetries: "3"
+          retryBackoffBase: "1s"
+          retryBackoffMax: "30s"
+          retryOn5xx: "true"
+          retryOn429: "true"
+
+# Environment variables needed:
+# export BASIC_AUTH_USERNAME="your-username"
+# export BASIC_AUTH_PASSWORD="your-password"

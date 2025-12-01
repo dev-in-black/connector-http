@@ -1,0 +1,40 @@
+# Basic HTTP Sink Example - No Authentication
+# This example shows the simplest configuration for sending records to an HTTP endpoint
+
+version: "2.2"
+pipelines:
+  - id: basic-http-pipeline
+    status: running
+    name: Basic HTTP Sink Pipeline
+    description: Send Kafka records to HTTP endpoint without authentication
+
+    connectors:
+      # Source: Read from Kafka
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        name: kafka-input
+        settings:
+          servers: "localhost:9092"
+          topics: "input-topic"
+          groupID: "http-sink-group"
+
+      # Destination: Send to HTTP endpoint
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-destination
+        settings:
+          # Required: HTTP endpoint URL
+          url: "https://webhook.site/your-unique-url"
+
+          # Optional: HTTP method (POST, PUT, PATCH)
+          method: "POST"
+
+          # Optional: Request timeout
+          timeout: "30s"
+
+          # Optional: Response file location
+          responseOutputPath: "/tmp/conduit-http-responses"
+          successFile: "success.ndjson"
+          errorFile: "error.ndjson"

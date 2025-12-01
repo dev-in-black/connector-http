@@ -1,0 +1,70 @@
+# Full-Featured HTTP Sink Configuration
+# This example shows all available configuration options
+
+version: "2.2"
+pipelines:
+  - id: http-full-pipeline
+    status: running
+    name: Full-Featured HTTP Sink
+    description: Complete example with all configuration options
+
+    connectors:
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "production-events"
+          groupID: "http-full-group"
+
+      - id: http-sink
+        type: destination
+        plugin: standalone:http
+        name: http-full-destination
+        settings:
+          # === Core HTTP Settings ===
+          url: "https://api.production.com/v1/events"
+          method: "POST"
+          timeout: "45s"
+          maxIdleConns: "200"
+          maxConnsPerHost: "20"
+
+          # === Authentication (OAuth2) ===
+          authType: "oauth2"
+          oauth2ClientId: "${OAUTH2_CLIENT_ID}"
+          oauth2ClientSecret: "${OAUTH2_CLIENT_SECRET}"
+          oauth2TokenUrl: "https://auth.production.com/oauth2/token"
+          oauth2Scopes: "events:write,webhooks:manage"
+
+          # === Custom Headers ===
+          envHeaderPrefix: "HTTP_HEADER_"
+          # Set: HTTP_HEADER_X_API_KEY, HTTP_HEADER_X_TENANT_ID, etc.
+
+          # === Retry Configuration ===
+          maxRetries: "5"
+          retryBackoffBase: "2s"
+          retryBackoffMax: "60s"
+          retryOn5xx: "true"
+          retryOn429: "true"
+          retryOnNetworkErr: "true"
+
+          # === Response Handling ===
+          responseOutputPath: "/var/conduit/http-responses"
+          successFile: "success.ndjson"
+          errorFile: "error.ndjson"
+          includeResponseHeaders: "true"
+          includeRequestMetadata: "true"
+
+          # === Request Body ===
+          usePayloadAfter: "true"
+
+# Required environment variables:
+# export OAUTH2_CLIENT_ID="prod-client-id"
+# export OAUTH2_CLIENT_SECRET="prod-client-secret"
+# export HTTP_HEADER_X_API_KEY="prod-api-key"
+# export HTTP_HEADER_X_TENANT_ID="tenant-prod-123"
+# export HTTP_HEADER_X_ENVIRONMENT="production"
+
+# Response files will contain:
+# - /var/conduit/http-responses/success.ndjson (successful 2xx responses)
+# - /var/conduit/http-responses/error.ndjson (failed requests or non-2xx responses)

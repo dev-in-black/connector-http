@@ -1,0 +1,30 @@
+name: "http"
+summary: "HTTP sink connector for Conduit"
+description: |
+  The HTTP connector sends records from Conduit to HTTP endpoints with support for:
+  - Multiple authentication methods (Basic, Bearer, OAuth2 Client Credentials)
+  - Custom headers from environment variables and static configuration
+  - Configurable retry with exponential backoff
+  - Response routing to success/error files for further processing
+  - Schema validation (JSON Schema, Avro) - coming soon
+
+version: "v0.1.0"
+author: "Conduit"
+sourceParams: {}
+destinationParams:
+  url:
+    description: "HTTP endpoint URL to send requests to"
+    type: "string"
+    required: true
+  method:
+    description: "HTTP method (POST, PUT, PATCH)"
+    type: "string"
+    default: "POST"
+  authType:
+    description: "Authentication type: none, basic, bearer, oauth2"
+    type: "string"
+    default: "none"
+  maxRetries:
+    description: "Maximum number of retry attempts (0-10)"
+    type: "int"
+    default: "3"
