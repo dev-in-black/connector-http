@@ -1,0 +1,118 @@
+version: "2.2"
+pipelines:
+  # Pipeline 1: Send HTTP requests and publish responses to Kafka
+  - id: http-to-kafka
+    status: running
+    description: |
+      Reads events from Kafka, sends them to an HTTP API,
+      and publishes HTTP responses to a Kafka topic for downstream processing
+
+    connectors:
+      - id: input-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "api-requests"
+          groupId: "http-connector-group"
+
+      - id: http-api-destination
+        type: destination
+        plugin: builtin:http
+        settings:
+          # HTTP endpoint configuration
+          url: "https://api.example.com/process"
+          method: "POST"
+          timeout: "30s"
+
+          # Authentication
+          authType: "bearer"
+          bearerToken: "${API_TOKEN}"
+
+          # Retry configuration
+          maxRetries: 3
+          retryBackoffBase: "1s"
+          retryOn5xx: true
+
+          # Kafka response publishing
+          kafkaEnabled: true
+          kafkaBrokers: "localhost:9092"
+          kafkaTopic: "http-responses"
+          kafkaCompression: "snappy"
+
+  # Pipeline 2: Process HTTP responses from Kafka
+  - id: response-processor
+    status: running
+    description: |
+      Consumes HTTP responses from Kafka and processes them
+      (e.g., stores in database, sends notifications, analytics)
+
+    connectors:
+      - id: kafka-response-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "http-responses"
+          groupId: "response-processor-group"
+
+      - id: response-destination
+        type: destination
+        plugin: builtin:postgres
+        settings:
+          url: "postgres://user:pass@localhost:5432/responses"
+          table: "api_responses"
+
+---
+# Production example with secure Kafka
+version: "2.2"
+pipelines:
+  - id: http-to-secure-kafka-prod
+    status: running
+    description: |
+      Production setup with OAuth2 authentication for HTTP
+      and SASL/TLS for Kafka
+
+    connectors:
+      - id: input-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "broker1.prod:9093,broker2.prod:9093"
+          topics: "api-requests-prod"
+          groupId: "http-connector-prod"
+          securityProtocol: "SASL_SSL"
+          saslMechanism: "SCRAM-SHA-256"
+          saslUsername: "${KAFKA_CONSUMER_USERNAME}"
+          saslPassword: "${KAFKA_CONSUMER_PASSWORD}"
+
+      - id: http-api-destination
+        type: destination
+        plugin: builtin:http
+        settings:
+          # HTTP Configuration
+          url: "https://api.production.com/webhooks"
+          method: "POST"
+          timeout: "60s"
+
+          # OAuth2 Authentication
+          authType: "oauth2"
+          oauth2ClientId: "${OAUTH2_CLIENT_ID}"
+          oauth2ClientSecret: "${OAUTH2_CLIENT_SECRET}"
+          oauth2TokenUrl: "https://auth.production.com/oauth/token"
+          oauth2Scopes: "api.write,webhooks.send"
+
+          # Kafka Response Publishing (Secure)
+          kafkaEnabled: true
+          kafkaBrokers: "broker1.prod:9093,broker2.prod:9093,broker3.prod:9093"
+          kafkaTopic: "http-responses-prod"
+          kafkaClientId: "http-connector-prod"
+          kafkaCompression: "zstd"
+          kafkaEnableIdempotence: true
+
+          # Kafka SASL/TLS
+          kafkaSaslEnabled: true
+          kafkaSaslMechanism: "SCRAM-SHA-256"
+          kafkaSaslUsername: "${KAFKA_PRODUCER_USERNAME}"
+          kafkaSaslPassword: "${KAFKA_PRODUCER_PASSWORD}"
+          kafkaTlsEnabled: true

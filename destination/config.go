@@ -63,12 +63,22 @@ type Config struct {
 	RetryOn429        bool          `json:"retryOn429" default:"true"`
 	RetryOnNetworkErr bool          `json:"retryOnNetworkErr" default:"true"`
 
-	// Response Handling
-	ResponseOutputPath     string `json:"responseOutputPath" default:"/tmp/conduit-http-responses"`
-	SuccessFile            string `json:"successFile" default:"success.ndjson"`
-	ErrorFile              string `json:"errorFile" default:"error.ndjson"`
-	IncludeResponseHeaders bool   `json:"includeResponseHeaders" default:"true"`
-	IncludeRequestMetadata bool   `json:"includeRequestMetadata" default:"true"`
+	// Kafka Configuration for Response Publishing
+	KafkaEnabled       bool   `json:"kafkaEnabled" default:"false"`
+	KafkaBrokers       string `json:"kafkaBrokers"` // Comma-separated list of brokers
+	KafkaTopic         string `json:"kafkaTopic" default:"http-responses"`
+	KafkaClientID      string `json:"kafkaClientId" default:"http-connector"`
+	KafkaCompression   string `json:"kafkaCompression" default:"snappy"` // none, gzip, snappy, lz4, zstd
+	KafkaEnableIdempotence bool `json:"kafkaEnableIdempotence" default:"true"`
+
+	// Kafka Authentication (SASL)
+	KafkaSASLEnabled   bool   `json:"kafkaSaslEnabled" default:"false"`
+	KafkaSASLMechanism string `json:"kafkaSaslMechanism" default:"PLAIN"` // PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+	KafkaSASLUsername  string `json:"kafkaSaslUsername"`
+	KafkaSASLPassword  string `json:"kafkaSaslPassword"`
+
+	// Kafka TLS
+	KafkaTLSEnabled    bool `json:"kafkaTlsEnabled" default:"false"`
 }
 
 // Validate checks if the configuration is valid
@@ -116,6 +126,31 @@ func (c *Config) Validate(ctx context.Context) error {
 		return fmt.Errorf("invalid schemaType: %s (must be json or avro)", c.SchemaType)
 	}
 
+	// Validate Kafka configuration if enabled
+	if c.KafkaEnabled {
+		if c.KafkaBrokers == "" {
+			return fmt.Errorf("kafkaBrokers is required when kafkaEnabled is true")
+		}
+		if c.KafkaTopic == "" {
+			return fmt.Errorf("kafkaTopic is required when kafkaEnabled is true")
+		}
+
+		validCompressions := map[string]bool{"none": true, "gzip": true, "snappy": true, "lz4": true, "zstd": true}
+		if !validCompressions[c.KafkaCompression] {
+			return fmt.Errorf("invalid kafkaCompression: %s (must be none, gzip, snappy, lz4, or zstd)", c.KafkaCompression)
+		}
+
+		if c.KafkaSASLEnabled {
+			validMechanisms := map[string]bool{"PLAIN": true, "SCRAM-SHA-256": true, "SCRAM-SHA-512": true}
+			if !validMechanisms[c.KafkaSASLMechanism] {
+				return fmt.Errorf("invalid kafkaSaslMechanism: %s (must be PLAIN, SCRAM-SHA-256, or SCRAM-SHA-512)", c.KafkaSASLMechanism)
+			}
+			if c.KafkaSASLUsername == "" || c.KafkaSASLPassword == "" {
+				return fmt.Errorf("kafkaSaslUsername and kafkaSaslPassword are required when kafkaSaslEnabled is true")
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -158,4 +193,17 @@ func (c *Config) GetOAuth2Scopes() []string {
 		scopes[i] = strings.TrimSpace(scopes[i])
 	}
 	return scopes
+}
+
+// GetKafkaBrokers parses the comma-separated brokers string
+func (c *Config) GetKafkaBrokers() []string {
+	if c.KafkaBrokers == "" {
+		return []string{}
+	}
+	brokers := strings.Split(c.KafkaBrokers, ",")
+	// Trim whitespace from each broker
+	for i := range brokers {
+		brokers[i] = strings.TrimSpace(brokers[i])
+	}
+	return brokers
 }

@@ -3,25 +3,26 @@ package destination
 import (
 	"context"
 	"fmt"
+	"io"
 	stdhttp "net/http"
 
-	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
-	"github.com/conduitio/conduit-connector-http/internal/auth"
-	"github.com/conduitio/conduit-connector-http/internal/http"
-	"github.com/conduitio/conduit-connector-http/internal/response"
+	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/dev-in-black/connector-http/internal/auth"
+	"github.com/dev-in-black/connector-http/internal/http"
+	"github.com/dev-in-black/connector-http/internal/kafka"
 )
 
 // Destination implements the Conduit destination interface for HTTP endpoints
 type Destination struct {
 	sdk.UnimplementedDestination
 
-	config         Config
-	httpClient     *http.Client
-	authManager    auth.Manager
-	responseWriter *response.Writer
-	retryEngine    *http.RetryEngine
+	config        Config
+	httpClient    *http.Client
+	authManager   auth.Manager
+	retryEngine   *http.RetryEngine
+	kafkaProducer *kafka.Producer
 }
 
 // NewDestination creates a new HTTP destination
@@ -119,18 +120,31 @@ func (d *Destination) Open(ctx context.Context) error {
 
 	d.retryEngine = http.NewRetryEngine(retryConfig)
 
-	// Initialize response writer
-	responseConfig := response.Config{
-		OutputPath:             d.config.ResponseOutputPath,
-		SuccessFile:            d.config.SuccessFile,
-		ErrorFile:              d.config.ErrorFile,
-		IncludeResponseHeaders: d.config.IncludeResponseHeaders,
-		IncludeRequestMetadata: d.config.IncludeRequestMetadata,
-	}
+	// Initialize Kafka producer if enabled
+	if d.config.KafkaEnabled {
+		kafkaConfig := kafka.Config{
+			Brokers:           d.config.GetKafkaBrokers(),
+			Topic:             d.config.KafkaTopic,
+			ClientID:          d.config.KafkaClientID,
+			Compression:       d.config.KafkaCompression,
+			EnableIdempotence: d.config.KafkaEnableIdempotence,
+			SASLEnabled:       d.config.KafkaSASLEnabled,
+			SASLMechanism:     d.config.KafkaSASLMechanism,
+			SASLUsername:      d.config.KafkaSASLUsername,
+			SASLPassword:      d.config.KafkaSASLPassword,
+			TLSEnabled:        d.config.KafkaTLSEnabled,
+		}
 
-	d.responseWriter, err = response.NewWriter(responseConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create response writer: %w", err)
+		var err error
+		d.kafkaProducer, err = kafka.NewProducer(ctx, kafkaConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create Kafka producer: %w", err)
+		}
+
+		sdk.Logger(ctx).Info().
+			Str("topic", d.config.KafkaTopic).
+			Strs("brokers", d.config.GetKafkaBrokers()).
+			Msg("Kafka producer initialized")
 	}
 
 	sdk.Logger(ctx).Info().Msg("HTTP destination opened successfully")
@@ -146,8 +160,6 @@ func (d *Destination) Write(ctx context.Context, records []opencdc.Record) (int,
 		body, err := d.prepareRequestBody(record)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to prepare request body")
-			// Write error to error file
-			d.responseWriter.WriteError(record, err, nil)
 			return i, fmt.Errorf("failed to prepare request body: %w", err)
 		}
 
@@ -158,29 +170,48 @@ func (d *Destination) Write(ctx context.Context, records []opencdc.Record) (int,
 
 		if err != nil {
 			logger.Error().Err(err).Msg("HTTP request failed after retries")
-			// Write error to error file
-			d.responseWriter.WriteError(record, err, resp)
 			return i, fmt.Errorf("HTTP request failed: %w", err)
 		}
 
-		// Route response based on status code
+		// Read response body
+		var responseBody []byte
+		if resp.Body != nil {
+			responseBody, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				logger.Error().Err(err).Msg("Failed to read response body")
+				return i, fmt.Errorf("failed to read response body: %w", err)
+			}
+		}
+
+		// Publish response to Kafka if enabled
+		if d.kafkaProducer != nil {
+			// Convert OpenCDC metadata to map[string]string for record headers
+			recordHeaders := make(map[string]string)
+			for key, value := range record.Metadata {
+				recordHeaders[key] = value
+			}
+
+			if err := d.kafkaProducer.PublishResponse(ctx, resp.StatusCode, resp.Header, responseBody, d.config.URL, d.config.Method, recordHeaders); err != nil {
+				logger.Error().Err(err).Msg("Failed to publish response to Kafka")
+				return i, fmt.Errorf("failed to publish to Kafka: %w", err)
+			}
+			logger.Debug().
+				Str("topic", d.config.KafkaTopic).
+				Int("recordHeaders", len(recordHeaders)).
+				Msg("Response published to Kafka")
+		}
+
+		// Check response status code
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			logger.Debug().
 				Int("status", resp.StatusCode).
 				Msg("HTTP request successful")
-
-			if err := d.responseWriter.WriteSuccess(record, resp); err != nil {
-				logger.Warn().Err(err).Msg("Failed to write success response")
-			}
 		} else {
 			logger.Warn().
 				Int("status", resp.StatusCode).
 				Msg("HTTP request returned non-2xx status")
-
-			err := fmt.Errorf("HTTP %d", resp.StatusCode)
-			if writeErr := d.responseWriter.WriteError(record, err, resp); writeErr != nil {
-				logger.Warn().Err(writeErr).Msg("Failed to write error response")
-			}
+			return i, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 	}
 
@@ -191,10 +222,10 @@ func (d *Destination) Write(ctx context.Context, records []opencdc.Record) (int,
 func (d *Destination) Teardown(ctx context.Context) error {
 	sdk.Logger(ctx).Info().Msg("Tearing down HTTP destination")
 
-	if d.responseWriter != nil {
-		if err := d.responseWriter.Close(); err != nil {
-			return fmt.Errorf("failed to close response writer: %w", err)
-		}
+	// Close Kafka producer if initialized
+	if d.kafkaProducer != nil {
+		d.kafkaProducer.Close()
+		sdk.Logger(ctx).Info().Msg("Kafka producer closed")
 	}
 
 	sdk.Logger(ctx).Info().Msg("HTTP destination torn down successfully")

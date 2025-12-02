@@ -113,9 +113,11 @@ export HTTP_HEADER_USER_AGENT="MyApp/1.0"
 - All configurable parameters
 
 ### [07-response-pipeline.yaml](07-response-pipeline.yaml)
-**Request-Response Pipeline** - Complete bidirectional flow.
+**Request-Response Pipeline (LEGACY)** - File-based bidirectional flow.
 
-**Use case**: When you need to process HTTP responses in Kafka
+> **⚠️ LEGACY APPROACH**: This example uses file-based response handling with multiple pipelines. For production use, prefer the new Kafka-based response publishing (examples 08-09) which is more efficient and doesn't require intermediate files.
+
+**Use case**: Legacy deployments, testing file-based response handling
 
 **Key features**:
 - Three pipelines:
@@ -134,6 +136,63 @@ HTTP Endpoint
 Response Files (success.ndjson / error.ndjson)
     ↓
 Kafka (responses-success / responses-errors)
+```
+
+### [08-kafka-response-publishing.yaml](08-kafka-response-publishing.yaml)
+**Kafka Response Publishing (RECOMMENDED)** - Direct Kafka publishing without files.
+
+**Use case**: Production deployments requiring response processing
+
+**Key features**:
+- **No intermediate files** - responses go directly to Kafka
+- Single topic for both success and error responses
+- Response messages include:
+  - Original request record
+  - HTTP status code
+  - Response body and headers
+  - Error messages (if any)
+  - Correlation ID for tracking
+  - Timestamp
+- OAuth2 authentication example
+- Production-grade retry configuration
+
+**Data Flow**:
+```
+Kafka (webhook-requests)
+    ↓
+HTTP Endpoint
+    ↓
+Kafka (http-responses) ← Direct publish, no files!
+```
+
+**Environment variables required**:
+```bash
+export HTTP_TARGET_URL="https://api.example.com/webhook"
+export OAUTH2_CLIENT_ID="your-client-id"
+export OAUTH2_CLIENT_SECRET="your-client-secret"
+export OAUTH2_TOKEN_URL="https://auth.example.com/oauth/token"
+```
+
+### [09-kafka-separate-topics.yaml](09-kafka-separate-topics.yaml)
+**Kafka Separate Topics** - Success and error responses to different topics.
+
+**Use case**: When you need separate processing for successes and errors
+
+**Key features**:
+- Separate Kafka topics: `payment-success` and `payment-errors`
+- Payment processing example with retry
+- High-throughput configuration
+- Correlation ID tracking
+- Complete response metadata
+
+**Data Flow**:
+```
+Kafka (payment-requests)
+    ↓
+Payment Gateway API
+    ↓
+    ├─ 2xx → Kafka (payment-success)
+    └─ 4xx/5xx → Kafka (payment-errors)
 ```
 
 ## Configuration Parameters Reference
@@ -173,6 +232,21 @@ Kafka (responses-success / responses-errors)
 | `retryOnNetworkErr` | bool | `true` | Retry on network errors |
 
 ### Response Handling
+
+#### Kafka-based Response Publishing (Recommended)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enableKafkaResponse` | bool | `false` | Enable direct Kafka publishing (no files) |
+| `kafkaBrokers` | string | | Kafka brokers (comma-separated) |
+| `useSingleTopic` | bool | `true` | Use single topic for success/error |
+| `responseTopic` | string | `http-responses` | Topic for all responses (single topic mode) |
+| `successTopic` | string | `http-success` | Success topic (separate topics mode) |
+| `errorTopic` | string | `http-error` | Error topic (separate topics mode) |
+| `forwardResponseHeaders` | string | | HTTP headers to forward to Kafka headers (comma-separated, empty=all) |
+| `kafkaHeaderPrefix` | string | `http_` | Prefix for forwarded HTTP headers in Kafka |
+
+#### Legacy File-based Response Handling
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -235,16 +309,50 @@ bearerToken: "${TENANT_API_TOKEN}"
 
 **Files**: 05-custom-headers.yaml
 
-### Use Case 5: Event Processing Pipeline
+### Use Case 5: Event Processing Pipeline (Kafka Responses)
 
-Full request-response cycle with Kafka:
+**RECOMMENDED APPROACH**: Full request-response cycle with direct Kafka publishing:
 
 - Send events to HTTP endpoints
-- Capture all responses
-- Route successes and failures to different Kafka topics
-- Enable downstream processing
+- Capture all responses **directly to Kafka** (no files!)
+- Route successes and failures to same or separate topics
+- Enable downstream processing with minimal latency
+
+**Files**: 08-kafka-response-publishing.yaml, 09-kafka-separate-topics.yaml
+
+**Configuration**:
+```yaml
+enableKafkaResponse: true
+kafkaBrokers: "kafka-1:9092,kafka-2:9092"
+
+# Option A: Single topic for all responses
+useSingleTopic: true
+responseTopic: "http-responses"
+
+# Option B: Separate topics
+useSingleTopic: false
+successTopic: "http-success"
+errorTopic: "http-errors"
+```
+
+**Benefits over file-based approach**:
+- No file I/O overhead
+- Lower latency
+- No disk space management
+- Simpler architecture (single pipeline instead of three)
+- Better scalability
+
+### Use Case 6: Event Processing Pipeline (Legacy File-based)
+
+**LEGACY APPROACH**: Full request-response cycle using files:
+
+- Send events to HTTP endpoints
+- Capture responses to files
+- Use additional pipelines to consume files and publish to Kafka
 
 **Files**: 07-response-pipeline.yaml
+
+> ⚠️ **Note**: This approach is maintained for backwards compatibility but is not recommended for new deployments. Use Kafka-based response publishing instead (Use Case 5).
 
 ## Retry Behavior
 
@@ -268,7 +376,97 @@ The connector implements intelligent retry logic:
   - Attempt 3: 8s wait
   - Attempt 4+: 30s wait (capped)
 
-## Response File Format
+## Kafka Response Message Format
+
+When `enableKafkaResponse: true`, HTTP responses are published directly to Kafka with the following JSON structure:
+
+### Success Message
+
+```json
+{
+  "success": true,
+  "http_status": 200,
+  "response_body": "{\"id\":\"123\",\"status\":\"created\"}",
+  "response_headers": {
+    "Content-Type": ["application/json"],
+    "X-Request-Id": ["abc-123"],
+    "X-Transaction-Id": ["txn-789"]
+  },
+  "correlation_id": "record-uuid-or-key",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "original_record": {
+    "position": "...",
+    "key": "...",
+    "payload_after": "{...}",
+    "metadata": {...}
+  }
+}
+```
+
+### Error Message
+
+```json
+{
+  "success": false,
+  "http_status": 500,
+  "response_body": "{\"error\":\"Internal Server Error\"}",
+  "response_headers": {...},
+  "error_message": "HTTP 500",
+  "correlation_id": "record-uuid-or-key",
+  "timestamp": "2025-01-15T10:30:05Z",
+  "original_record": {...}
+}
+```
+
+### Kafka Record Headers
+
+Each Kafka message includes headers for easy filtering and routing:
+
+**Always included:**
+- `success`: `"true"` or `"false"` - Whether HTTP request succeeded
+- `http_status`: HTTP status code as string (e.g., `"200"`, `"500"`)
+- `correlation_id`: Correlation/tracking ID
+- `timestamp`: ISO 8601 timestamp
+
+**HTTP response headers (configurable):**
+
+By default, **all** HTTP response headers are forwarded to Kafka headers with the `http_` prefix.
+
+You can customize this behavior:
+
+```yaml
+# Forward ALL HTTP response headers (default)
+forwardResponseHeaders: ""
+kafkaHeaderPrefix: "http_"
+
+# Forward ONLY specific headers
+forwardResponseHeaders: "X-Request-Id,X-Transaction-Id,Content-Type"
+
+# Use custom prefix
+kafkaHeaderPrefix: "api_"
+```
+
+**Example Kafka headers:**
+- `http_X-Request-Id`: `"req-abc123"`
+- `http_X-Transaction-Id`: `"txn-789"`
+- `http_Content-Type`: `"application/json"`
+- `http_X-Rate-Limit-Remaining`: `"99"`
+
+**Use Cases:**
+- **Filtering**: Kafka consumers can filter by headers without parsing JSON body
+- **Routing**: Route messages based on status, transaction ID, etc.
+- **Monitoring**: Track request IDs, rate limits, etc. at Kafka level
+- **Debugging**: Quickly identify issues by inspecting Kafka headers
+
+### Correlation ID
+
+The `correlation_id` field is used to track requests:
+1. First, checks record metadata for `correlation_id` field
+2. Falls back to record position
+3. Falls back to record key
+4. Generates timestamp-based ID as last resort (`gen-{nanoseconds}`)
+
+## Response File Format (Legacy)
 
 ### Success File (success.ndjson)
 

@@ -3,7 +3,7 @@
 # Build the connector
 build:
 	@echo "Building HTTP connector..."
-	go build -o conduit-connector-http cmd/connector/main.go
+	go build -o connector-http cmd/connector/main.go
 
 # Install dependencies
 install:
@@ -24,8 +24,8 @@ lint:
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
-	rm -f conduit-connector-http
-	rm -rf /tmp/conduit-http-responses
+	rm -f connector-http
+	rm -rf /tmp/http-responses
 
 # Format code
 fmt:

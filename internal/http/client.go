@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/conduitio/conduit-connector-http/internal/auth"
+	"github.com/dev-in-black/connector-http/internal/auth"
 )
 
 // Config holds HTTP client configuration

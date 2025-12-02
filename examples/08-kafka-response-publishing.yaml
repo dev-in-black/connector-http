@@ -1,0 +1,99 @@
+version: "2.2"
+pipelines:
+  - id: http-to-kafka-pipeline
+    status: running
+    description: |
+      HTTP destination that publishes responses to Kafka.
+      This example shows how to capture HTTP API responses and stream them to Kafka
+      for downstream processing, analytics, or event-driven workflows.
+
+    connectors:
+      # Source: Read from input Kafka topic
+      - id: kafka-source
+        type: source
+        plugin: builtin:kafka
+        settings:
+          servers: "localhost:9092"
+          topics: "api-requests"
+          groupId: "http-connector-group"
+
+      # Destination: Send to HTTP API and publish responses to Kafka
+      - id: http-destination-with-kafka
+        type: destination
+        plugin: builtin:http
+        settings:
+          # HTTP Configuration
+          url: "https://api.example.com/webhook"
+          method: "POST"
+          timeout: "30s"
+
+          # Authentication
+          authType: "bearer"
+          bearerToken: "${BEARER_TOKEN}"
+
+          # Retry Configuration
+          maxRetries: 3
+          retryBackoffBase: "1s"
+          retryBackoffMax: "30s"
+          retryOn5xx: true
+          retryOn429: true
+
+          # Kafka Response Publishing
+          kafkaEnabled: true
+          kafkaBrokers: "localhost:9092"
+          kafkaTopic: "http-responses"
+          kafkaClientId: "http-connector"
+          kafkaCompression: "snappy"
+          kafkaEnableIdempotence: true
+
+---
+# Example with Kafka SASL/SCRAM authentication
+version: "2.2"
+pipelines:
+  - id: http-to-secure-kafka-pipeline
+    status: running
+    description: |
+      HTTP destination with secure Kafka (SASL/SCRAM-SHA-256 + TLS)
+      for production environments
+
+    connectors:
+      - id: source
+        type: source
+        plugin: builtin:generator
+        settings:
+          format.type: "structured"
+          format.options.id: "int"
+          format.options.name: "string"
+          rate: "1"
+
+      - id: http-destination-secure-kafka
+        type: destination
+        plugin: builtin:http
+        settings:
+          # HTTP Configuration
+          url: "https://api.production.com/events"
+          method: "POST"
+
+          # OAuth2 Authentication
+          authType: "oauth2"
+          oauth2ClientId: "${OAUTH2_CLIENT_ID}"
+          oauth2ClientSecret: "${OAUTH2_CLIENT_SECRET}"
+          oauth2TokenUrl: "https://auth.production.com/oauth/token"
+          oauth2Scopes: "api.write"
+
+          # Kafka Response Publishing (Secure)
+          kafkaEnabled: true
+          kafkaBrokers: "kafka1.prod:9093,kafka2.prod:9093,kafka3.prod:9093"
+          kafkaTopic: "http-responses-prod"
+          kafkaClientId: "http-connector-prod"
+          kafkaCompression: "zstd"
+          kafkaEnableIdempotence: true
+
+          # Kafka SASL Authentication
+          kafkaSaslEnabled: true
+          kafkaSaslMechanism: "SCRAM-SHA-256"
+          kafkaSaslUsername: "${KAFKA_USERNAME}"
+          kafkaSaslPassword: "${KAFKA_PASSWORD}"
+
+          # Kafka TLS
+          kafkaTlsEnabled: true
